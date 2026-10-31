@@ -4,6 +4,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from app.adapters.base import PackageAdapter, PackageMetadata
+from app.ai.investigator import AIInvestigator
+from app.ai.models import AIInvestigationResult
 from app.analysis.analyzer import analyze_package
 from app.analysis.models import AnalysisLimits, SecurityAnalysis
 from app.archives.extract import ExtractionLimits, extract_archive
@@ -27,6 +29,7 @@ class ReleaseAnalysis(BaseModel):
     security: SecurityAnalysis
     provenance: ProvenanceResult
     risk: RiskAssessment
+    ai: AIInvestigationResult | None = None
 
 
 async def analyze_release(
@@ -39,6 +42,7 @@ async def analyze_release(
     extraction_limits: ExtractionLimits | None = None,
     comparison_limits: ComparisonLimits | None = None,
     analysis_limits: AnalysisLimits | None = None,
+    ai_investigator: AIInvestigator | None = None,
 ) -> ReleaseAnalysis:
     """Retrieve and assess one release, without ever executing its code.
 
@@ -76,6 +80,13 @@ async def analyze_release(
     )
     provenance = await provenance_checker.check(metadata, tarball.path, match)
     risk = score_release(match, report, package_inventory, security, provenance)
+
+    ai_result = None
+    if ai_investigator is not None:
+        ai_result = await ai_investigator.investigate(
+            metadata, match, report, security, risk, work_dir / "package"
+        )
+
     return ReleaseAnalysis(
         metadata=metadata,
         source_match=match,
@@ -83,4 +94,5 @@ async def analyze_release(
         security=security,
         provenance=provenance,
         risk=risk,
+        ai=ai_result,
     )
