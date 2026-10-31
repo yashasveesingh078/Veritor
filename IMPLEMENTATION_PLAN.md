@@ -1,9 +1,8 @@
 # Implementation Plan
 
-This is a plan, not a description of working software. Only Phase 0, the API
-foundation, the npm part of Phase 1, safe extraction, GitHub source discovery,
-the file comparison in Phase 3, static analysis and provenance checks in Phase 4
-and risk scoring are done. None of the retrieval code is connected to the API yet.
+The backend scan pipeline, API endpoints (POST /api/v1/scans, GET status, report, findings,
+files, diffs), retrieval and comparison orchestration, static analysis, provenance checks,
+deterministic risk scoring, and the Ollama AI investigator (qwen2.5-coder:7b) are implemented.
 
 ## Goal
 

@@ -13,10 +13,9 @@ CommitCrew
 Problem 04: Published Package vs Source Code Integrity Analyzer
 
 ## Solution
-TrueShip compares packages published on npm and PyPI with their source
+Veritor compares packages published on npm and PyPI with their source
 repositories, explains each difference with evidence, and flags
 modifications that it cannot explain or that add risky behaviour.
-
 ## AI Models Used
 
 ### Phi-4 Mini (`phi4-mini`, via Ollama)

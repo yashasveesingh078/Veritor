@@ -1,6 +1,7 @@
 import re
+from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from packaging.version import InvalidVersion, Version
@@ -35,6 +36,30 @@ def _is_pep440(version: str) -> bool:
     except InvalidVersion:
         return False
     return True
+
+
+class ScanState(StrEnum):
+    ACCEPTED = "accepted"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ScanStage(StrEnum):
+    QUEUED = "queued"
+    FETCHING_METADATA = "fetching_metadata"
+    DOWNLOADING_ARTIFACT = "downloading_artifact"
+    RESOLVING_SOURCE = "resolving_source"
+    EXTRACTING_PACKAGE = "extracting_package"
+    DOWNLOADING_SOURCE = "downloading_source"
+    EXTRACTING_SOURCE = "extracting_source"
+    COMPARING = "comparing"
+    SECURITY_SCANNING = "security_scanning"
+    CHECKING_PROVENANCE = "checking_provenance"
+    SCORING_RISK = "scoring_risk"
+    AI_INVESTIGATION = "ai_investigation"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class ScanRequest(BaseModel):
@@ -74,8 +99,81 @@ class ScanResponse(BaseModel):
     scan_id: UUID
     status: Literal["accepted"] = Field(
         default="accepted",
-        description="The request passed validation. No analysis is performed yet.",
+        description="The request passed validation.",
     )
     ecosystem: Ecosystem
     package_name: str
     version: str
+
+
+class ScanStatusResponse(BaseModel):
+    scan_id: UUID
+    ecosystem: Ecosystem
+    package_name: str
+    version: str
+    status: ScanState
+    stage: ScanStage
+    progress_percent: int = Field(ge=0, le=100)
+    message: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+class FileDiffItem(BaseModel):
+    path: str
+    status: str
+    diff_status: str
+    unified: str | None = None
+    added_lines: int | None = None
+    removed_lines: int | None = None
+
+
+class ScanDiffsResponse(BaseModel):
+    scan_id: UUID
+    package_name: str
+    version: str
+    total_diffs: int
+    diffs: list[FileDiffItem]
+
+
+class ScanFilesResponse(BaseModel):
+    scan_id: UUID
+    package_name: str
+    version: str
+    summary: Any | None = None
+    files: list[Any] = []
+
+
+class ScanFindingsResponse(BaseModel):
+    scan_id: UUID
+    package_name: str
+    version: str
+    risk_score: int | None = None
+    risk_level: str | None = None
+    findings: list[Any] = []
+    ai_explanations: list[Any] = []
+    gaps: list[Any] = []
+    factors: list[Any] = []
+    floors: list[Any] = []
+
+
+class ScanReportResponse(BaseModel):
+    scan_id: UUID
+    ecosystem: Ecosystem
+    package_name: str
+    version: str
+    status: ScanState
+    metadata: Any | None = None
+    source_match: Any | None = None
+    comparison: Any | None = None
+    security: Any | None = None
+    provenance: Any | None = None
+    risk: Any | None = None
+    ai: Any | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_seconds: float | None = None
+    error: str | None = None
