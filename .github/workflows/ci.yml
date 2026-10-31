@@ -130,7 +130,7 @@ jobs:
           npm audit --audit-level=high
 
       - name: Run Trivy vulnerability & secret scanner
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: "fs"
           scan-ref: "."
@@ -156,8 +156,6 @@ jobs:
           file: ./backend/Dockerfile
           push: false
           tags: veritor-backend:validate
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Validate Frontend Docker Build
         uses: docker/build-push-action@v5
@@ -166,5 +164,3 @@ jobs:
           file: ./frontend/Dockerfile
           push: false
           tags: veritor-frontend:validate
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
