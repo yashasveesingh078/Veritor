@@ -101,20 +101,25 @@ findings, file inventory, and diff endpoints.
 
 ### Phase 5: AI Investigator (done)
 
-- Connects to Ollama `qwen2.5-coder:7b` to explain findings with structured JSON output.
-- Real deterministic findings and code excerpts supplied; model never invents evidence
-  and never overrides risk scores.
-- Graceful fallback when Ollama is offline or unavailable.
+- Connects to Ollama with `qwen2.5-coder:7b` to explain findings with structured JSON output.
+- Supplies real deterministic findings and source/package excerpts; model is barred from
+  inventing evidence or altering deterministic risk results.
+- Schema validation with Pydantic (`FindingExplanation`, `AIInvestigationResult`).
+- Automated graceful offline fallback when Ollama is unavailable.
 
-### Phase 6: Scan Orchestration & CI/CD (done)
+### Phase 6: Scan Orchestration & REST Endpoints (done)
 
-- Endpoints implemented: `POST /api/v1/scans`, `GET /api/v1/scans/{id}`, `/report`,
-  `/findings`, `/files`, `/diff`.
-- Production-grade GitHub Actions CI/CD workflows:
-  - CI: Python setup, linting (Ruff), type check (Mypy), Pytest with coverage,
-    frontend lint/typecheck/build/test, security audits (Bandit, pip-audit, npm audit, Trivy),
-    and Docker build validation.
-  - Release: automated container tagging and GHCR publishing on version tags.
+- Full pipeline wiring: `Package input → npm fetcher → GitHub source resolver → safe extraction → inventory → comparison → artifact classification → security scanner → provenance checker → risk engine → AI investigator → integrity report`.
+- Real scan statuses and progression tracking (no fake timers or synthetic progress).
+- Complete REST API endpoints:
+  - `POST /api/v1/scans`: Initiates and queues asynchronous scans.
+  - `GET /api/v1/scans/{scan_id}`: Real-time scan state, stage, and progress percentage.
+  - `GET /api/v1/scans/{scan_id}/report`: Full analysis report.
+  - `GET /api/v1/scans/{scan_id}/files`: Complete file inventory and comparison classifications.
+  - `GET /api/v1/scans/{scan_id}/files/{file_id}/diff`: File diff for a specific file by path or index.
+  - `GET /api/v1/scans/{scan_id}/findings`: Security findings and AI investigator explanations.
+- Validated with end-to-end live npm package scan (`left-pad@1.3.0`) and mock integration tests.
+- Production-grade GitHub Actions CI/CD workflows (CI & Release).
 
 ### Phase 7: Validation and Demo (next)
 

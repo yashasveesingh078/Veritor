@@ -141,6 +141,18 @@ async def test_scan_full_api_lifecycle(api_app: Any, test_manager: ScanManager) 
         assert filtered_diff_data["total_diffs"] == 1
         assert filtered_diff_data["diffs"][0]["path"] == "index.js"
 
+        # 8. GET /api/v1/scans/{scan_id}/files/{file_id}/diff (by path and by index)
+        file_diff_path_resp = await client.get(f"/api/v1/scans/{scan_id}/files/index.js/diff")
+        assert file_diff_path_resp.status_code == 200
+        file_diff_data = file_diff_path_resp.json()
+        assert file_diff_data["path"] == "index.js"
+        assert file_diff_data["status"] == "MODIFIED"
+        assert "eval" in (file_diff_data["unified"] or "")
+
+        file_diff_idx_resp = await client.get(f"/api/v1/scans/{scan_id}/files/1/diff")
+        assert file_diff_idx_resp.status_code == 200
+        assert file_diff_idx_resp.json()["path"] in ("index.js", "package.json")
+
 
 async def test_scan_not_found_errors(api_app: Any, test_manager: ScanManager) -> None:
     transport = httpx.ASGITransport(app=api_app)

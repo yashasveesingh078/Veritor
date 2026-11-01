@@ -318,6 +318,43 @@ class ScanManager:
             diffs=diff_items,
         )
 
+    def get_file_diff(self, scan_id: UUID, file_id: str) -> FileDiffItem:
+        record = self.get_scan(scan_id)
+        if record is None:
+            raise ScanNotFoundError(f"Scan {scan_id} not found")
+        if record.status in (ScanState.ACCEPTED, ScanState.RUNNING):
+            raise ScanNotReadyError(f"Scan {scan_id} is still {record.status.value}")
+
+        report = record.report
+        if not report or not report.comparison or not report.comparison.files:
+            raise ScanNotFoundError(f"No comparison files found for scan {scan_id}")
+
+        matched_item = None
+        # Try matching by index if file_id is numeric
+        if file_id.isdigit():
+            idx = int(file_id)
+            if 0 <= idx < len(report.comparison.files):
+                matched_item = report.comparison.files[idx]
+
+        # Otherwise match by path or normalized path
+        if matched_item is None:
+            for file_comp in report.comparison.files:
+                if file_id in (file_comp.path, file_comp.package_path, file_comp.source_path):
+                    matched_item = file_comp
+                    break
+
+        if matched_item is None:
+            raise ScanNotFoundError(f"File {file_id!r} not found in scan comparison")
+
+        return FileDiffItem(
+            path=matched_item.path,
+            status=matched_item.status.value,
+            diff_status=matched_item.diff.status.value,
+            unified=matched_item.diff.unified,
+            added_lines=matched_item.diff.added_lines,
+            removed_lines=matched_item.diff.removed_lines,
+        )
+
 
 _scan_manager: ScanManager | None = None
 
