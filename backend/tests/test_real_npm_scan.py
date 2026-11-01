@@ -79,6 +79,12 @@ async def test_live_npm_scan_with_ollama(tmp_path: Path) -> None:
         diffs = manager.get_diffs(scan_id)
         assert isinstance(diffs.diffs, list)
 
+        # Verify single file diff endpoint
+        if len(files.files) > 0:
+            sample_path = files.files[0].path
+            sample_diff = manager.get_file_diff(scan_id, sample_path)
+            assert sample_diff.path == sample_path
+
         # Verify findings
         findings = manager.get_findings(scan_id)
         assert findings.package_name == "left-pad"

@@ -10,6 +10,7 @@ from app.scans.manager import (
 )
 from app.schemas.common import ErrorResponse
 from app.schemas.scans import (
+    FileDiffItem,
     ScanDiffsResponse,
     ScanFilesResponse,
     ScanFindingsResponse,
@@ -94,6 +95,21 @@ def get_scan_files(scan_id: UUID) -> ScanFilesResponse:
     """Get file inventory and source comparison classifications."""
     try:
         return get_scan_manager().get_files(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ScanNotReadyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{scan_id}/files/{file_id:path}/diff",
+    response_model=FileDiffItem,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+def get_scan_file_diff(scan_id: UUID, file_id: str) -> FileDiffItem:
+    """Get file diff for a specific file by file index or path."""
+    try:
+        return get_scan_manager().get_file_diff(scan_id, file_id)
     except ScanNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ScanNotReadyError as exc:
