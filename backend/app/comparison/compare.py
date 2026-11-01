@@ -11,11 +11,11 @@ from dataclasses import dataclass
 
 from app.adapters.base import PackageMetadata
 from app.archives.models import EntryKind, FileInventory, InventoryEntry
+from app.comparison.artifact_classifier import classify_artifact
 from app.comparison.build_evidence import BuildProfile, collect_build_profile
 from app.comparison.generated import (
     TEXT_CONTENT_TYPES,
     AssessmentContext,
-    assess_generated,
     install_script_text,
 )
 from app.comparison.models import (
@@ -106,7 +106,13 @@ def compare_inventories(
     )
     for pair in pairs:
         if pair.package is not None and pair.status is not FileStatus.IDENTICAL:
-            pair.generated = assess_generated(pair.package_path or pair.path, pair.package, context)
+            pair.generated = classify_artifact(
+                pair.package_path or pair.path,
+                pair.package,
+                context,
+                pair.status,
+                pair.source_path,
+            )
 
     _add_diffs(pairs, package, source, limits)
     files = tuple(_to_file_comparison(pair) for pair in sorted(pairs, key=lambda p: p.path))
@@ -430,5 +436,6 @@ def _summarize(files: tuple[FileComparison, ...]) -> ComparisonSummary:
         binary_different=statuses[FileStatus.BINARY_DIFFERENT],
         renamed=statuses[FileStatus.RENAMED],
         likely_generated=classifications[GeneratedClassification.LIKELY_GENERATED],
+        suspicious=classifications[GeneratedClassification.SUSPICIOUS],
         uncertain=classifications[GeneratedClassification.UNCERTAIN],
     )

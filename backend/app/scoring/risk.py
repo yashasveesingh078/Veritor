@@ -222,9 +222,28 @@ def _uncertain(item: FileComparison) -> bool:
     )
 
 
+def _suspicious(item: FileComparison) -> bool:
+    return (
+        item.generated is not None
+        and item.generated.classification is GeneratedClassification.SUSPICIOUS
+    )
+
+
 def _comparison_factors(report: ComparisonReport, limitations: list[str]) -> list[RiskFactor]:
     category = FactorCategory.COMPARISON
     factors: list[RiskFactor] = []
+    suspicious = [item.path for item in report.files if _suspicious(item)]
+    if suspicious:
+        factors.append(
+            _factor(
+                "SUSPICIOUS_BUILD_ARTIFACT",
+                category,
+                _scaled(len(suspicious), 8, 24),
+                f"{len(suspicious)} build artifact(s) showed suspicious indicators "
+                "(e.g. untracked install script execution, obfuscation, or deceptive mapping).",
+                suspicious,
+            )
+        )
     added_code = [
         item.path
         for item in report.files

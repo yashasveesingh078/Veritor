@@ -10,6 +10,14 @@ class Rule:
     title: str
     category: Category
     recommendation: str
+    explanation: str = ""
+    recommended_action: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.explanation:
+            object.__setattr__(self, "explanation", self.title)
+        if not self.recommended_action:
+            object.__setattr__(self, "recommended_action", self.recommendation)
 
 
 _REVIEW_FLOW = "Check what this value is and where it comes from."

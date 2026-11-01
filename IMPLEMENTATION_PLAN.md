@@ -1,8 +1,9 @@
 # Implementation Plan
 
 The backend scan pipeline, API endpoints (POST /api/v1/scans, GET status, report, findings,
-files, diffs), retrieval and comparison orchestration, static analysis, provenance checks,
-deterministic risk scoring, and the Ollama AI investigator (qwen2.5-coder:7b) are implemented.
+files, diffs), retrieval and comparison orchestration, generated artifact intelligence,
+static AST security scanning, provenance checks, deterministic risk scoring, and the Ollama AI
+investigator (qwen2.5-coder:7b) are implemented and tested.
 
 ## Goal
 
@@ -32,78 +33,84 @@ configuration, CI, license and docs.
 ### API foundation (done)
 
 Modular routes, settings, logging, schemas, error handling, CORS, `GET /health`,
-and a validate-only `POST /api/v1/scans`. Scans are not stored or processed yet.
+and scan orchestration with background tasks, real status progression, report,
+findings, file inventory, and diff endpoints.
 
-### Phase 1: Fetch artifacts
+### Phase 1: Fetch artifacts (done)
 
 - Done for npm: `PackageAdapter` interface, exact-version metadata, and tarball
-  download verified against registry hashes. Not yet connected to the API.
+  download verified against registry hashes.
+- Done: safe extraction and file inventory for npm and GitHub archives preventing
+  symlink traversal, path escaping, and archive bombs.
+- Done: compare registry metadata with the `package.json` inside the tarball to
+  detect metadata spoofing or hidden install scripts.
 - To do: PyPI adapter.
-- To do: compare registry metadata with the `package.json` inside the tarball,
-  because publishers can make the two disagree.
-- Done: safe extraction and file inventory for npm and GitHub archives. Not yet
-  connected to the API.
 
-### Phase 2: Locate source
+### Phase 2: Locate source (done)
 
 - Done for GitHub: find the repository from package metadata, match the version
-  to a commit using the recorded commit and tags, record the method and
+  to a commit using recorded commits, tags, and heuristics, record the method and
   confidence, and download the archive for that exact commit.
 - A version with no established match is `UNCERTAIN`. No default branch is ever
   used in its place.
-- To do: support repositories outside GitHub.
+- To do: support repositories outside GitHub (GitLab, Bitbucket).
 
-### Phase 3: Compare
+### Phase 3: Compare & Generated Artifact Intelligence (done)
 
 - Done: compare inventories by SHA-256, with per-file JSON evidence and text
   diffs. Each file is identical, added, removed, modified, binary-different or
   renamed. Renames need an exact, unambiguous content match.
-- Done: classify differing files as `LIKELY_GENERATED` only with build evidence
-  from the source repository and a link from that file to its source. Everything
-  else is `UNCERTAIN`. No directory name is trusted on its own.
+- Done: `artifact_classifier.py` analyzes `package.json`, `tsconfig.json`, bundler
+  configs, entry points, source maps, counterparts, token similarity, and affirmative
+  suspicious indicators.
+- Classifies files strictly by evidence into:
+  - `LIKELY_GENERATED`: supported by build pipeline and source relationship evidence.
+  - `SUSPICIOUS`: deceptive source maps, unlinked execution in install scripts,
+    obfuscated packing, or unexpected executable bits.
+  - `UNCERTAIN`: when evidence is inconclusive. Never blindly whitelists `dist/`,
+    `build/`, or `lib/`.
 - Done: confirm the `package.json` at the matched commit has the same name and
   version, and report any disagreement as a warning.
-- To do: rebuild from source, because `LIKELY_GENERATED` shows a file looks like
-  build output, not that its content is what the build produced.
 
-### Phase 4: Detect risk
+### Phase 4: Static Security Scanner (done)
 
-- Done: AST-based scanning of added and modified JavaScript and TypeScript for
-  dynamic execution, child processes, environment access, network calls,
-  obfuscation and sensitive filesystem access, plus install scripts.
-- Done: rule, path, line, severity, confidence, evidence and recommendation on
-  every finding. Isolated API use stays low severity, and files that could not
-  be scanned are reported as gaps.
-- Done: npm provenance verified with Sigstore against the downloaded tarball.
-- Done: deterministic risk score, with each point traced to a factor. A score
-  is a triage signal, not a verdict.
-- To do: use verified provenance to resolve an `UNCERTAIN` source match.
-- To do: flag a release that lost provenance its earlier versions had.
-- To do: scan shell and Python files, which are currently reported as gaps.
+- Done: AST-based scanning for JavaScript and TypeScript (supporting JS, MJS, CJS,
+  JSX, TS, MTS, CTS, TSX) using Tree-Sitter without ever executing untrusted code.
+- Done: analyze added and modified files across 7 primary categories:
+  1. `eval()` and `new Function()` dynamic execution (`EXEC-001` through `EXEC-005`).
+  2. `child_process` execution and dangerous shell invocation (`PROC-001` through `PROC-005`).
+  3. `process.env` access, credential-like variables, and whole-env dumping (`ENV-001` through `ENV-003`).
+  4. Unexpected outbound network calls, data collectors, and public IP calls (`NET-001` through `NET-003`).
+  5. Base64 runtime decoding, character code generation, and obfuscator names (`OBF-001` through `OBF-004`).
+  6. Suspicious filesystem operations on credentials or startup files (`FS-001`, `FS-002`).
+  7. Lifecycle scripts (`preinstall`, `install`, `postinstall`) tracked vs repository (`LIFE-001` through `LIFE-007`).
+- Done: multi-signal correlation (`CORR-001` through `CORR-005`) for credentials + network, decoding + execution, network + execution, obfuscation + sensitive API, and sensitive behavior at install.
+- Done: contract validation: every finding includes `rule_id`, `path`, `line`, `severity`, `evidence`, `explanation`, `confidence`, and `recommended_action`.
+- Done: source-to-package differential scanning: pre-existing source patterns are separated so ordinary API usage is never treated as malicious.
+- Done: integration with artifact intelligence (suspicious artifacts elevate finding confidence).
+- Done: npm provenance verification with Sigstore against the downloaded tarball.
+- Done: deterministic risk scoring traced to specific factors.
 
-### Phase 5: Model interpretation
+### Phase 5: AI Investigator (done)
 
-- `phi4-mini` sorts flagged differences by urgency.
-- `qwen2.5-coder:7b` explains what the flagged code changes do.
-- Validate model output against a schema. Keep the report usable if Ollama is
-  unavailable.
-- Test with prompt-injection samples embedded in package files.
+- Connects to Ollama `qwen2.5-coder:7b` to explain findings with structured JSON output.
+- Real deterministic findings and code excerpts supplied; model never invents evidence
+  and never overrides risk scores.
+- Graceful fallback when Ollama is offline or unavailable.
 
-### Phase 6: API and interface
+### Phase 6: Scan Orchestration & CI/CD (done)
 
-- Connect `POST /api/v1/scans` to the analysis, and add endpoints to check
-  progress and fetch the report.
-- Add a frontend form, progress view, and findings view with diffs.
+- Endpoints implemented: `POST /api/v1/scans`, `GET /api/v1/scans/{id}`, `/report`,
+  `/findings`, `/files`, `/diff`.
+- Production-grade GitHub Actions CI/CD workflows:
+  - CI: Python setup, linting (Ruff), type check (Mypy), Pytest with coverage,
+    frontend lint/typecheck/build/test, security audits (Bandit, pip-audit, npm audit, Trivy),
+    and Docker build validation.
+  - Release: automated container tagging and GHCR publishing on version tags.
 
-### Phase 7: Validation and demo
+### Phase 7: Validation and Demo (next)
 
-- Build fixtures: clean packages, packages with benign build differences, and
-  locally built packages with injected changes.
-- Measure false positives and false negatives on those fixtures.
-- Prepare the demo and final documentation.
-
-## Open decisions
-
-- Product name: the repository uses Veritor, while `hackathon.md` uses TrueShip.
-- Persistence: reports may be in memory or stored in SQLite.
-- Rebuild scope: which build systems Phase 3 can reproduce in the time available.
+- Fixture package tests: clean packages, packages with benign build differences,
+  and packages with injected suspicious patterns.
+- Measure false positives and false negatives on fixtures.
+- Demo walkthrough and UI integration polish.

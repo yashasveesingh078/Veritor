@@ -26,7 +26,12 @@ from app.analysis.models import (
 from app.analysis.rules import RULES
 from app.archives.models import ContentType, EntryKind, FileInventory, InventoryEntry
 from app.comparison.generated import install_script_text, named_in_text
-from app.comparison.models import ComparisonReport, FileStatus
+from app.comparison.models import (
+    ComparisonReport,
+    FileComparison,
+    FileStatus,
+    GeneratedClassification,
+)
 from app.comparison.trees import FileTree
 
 _MANIFEST_LIMIT = 1024 * 1024
@@ -40,6 +45,7 @@ class _Target:
     path: str
     entry: InventoryEntry
     compare_with_source: bool
+    comparison_item: FileComparison | None = None
 
 
 def analyze_package(
@@ -111,10 +117,11 @@ def analyze_package(
 def _targets(package: FileTree, report: ComparisonReport | None) -> list[_Target]:
     if report is None:
         return [
-            _Target(path, entry, False)
+            _Target(path, entry, False, None)
             for path, entry in sorted(package.entries.items())
             if entry.kind is EntryKind.REGULAR
         ]
+    comparison_by_path = {item.path: item for item in report.files}
     targets: list[_Target] = []
     for item in report.files:
         # A renamed file has the same bytes as the source, so it contains nothing new.
@@ -122,7 +129,14 @@ def _targets(package: FileTree, report: ComparisonReport | None) -> list[_Target
             continue
         entry = package.entries.get(item.path)
         if entry is not None and entry.kind is EntryKind.REGULAR:
-            targets.append(_Target(item.path, entry, item.status is FileStatus.MODIFIED))
+            targets.append(
+                _Target(
+                    item.path,
+                    entry,
+                    item.status is FileStatus.MODIFIED,
+                    comparison_by_path.get(item.path),
+                )
+            )
     return targets
 
 
@@ -181,8 +195,16 @@ def _scan_target(
 
     runs_at_install = named_in_text(target.path, install_text)
     is_large = len(data) >= limits.large_file_bytes
-    correlated = _correlate(target.path, hits, pre_existing, is_large, runs_at_install)
-    findings = [_to_finding(target.path, hit, runs_at_install) for hit in hits]
+    is_suspicious_artifact = (
+        target.comparison_item is not None
+        and target.comparison_item.generated is not None
+        and target.comparison_item.generated.classification is GeneratedClassification.SUSPICIOUS
+    )
+    effective_is_large = is_large and not is_suspicious_artifact
+    correlated = _correlate(target.path, hits, pre_existing, effective_is_large, runs_at_install)
+    findings = [
+        _to_finding(target.path, hit, runs_at_install, is_suspicious_artifact) for hit in hits
+    ]
     return _cap_findings(findings, limits, target.path, gaps) + correlated
 
 
@@ -302,9 +324,16 @@ def _correlate(
     return findings
 
 
-def _to_finding(path: str, hit: Hit, runs_at_install: bool) -> Finding:
+def _to_finding(
+    path: str, hit: Hit, runs_at_install: bool, is_suspicious_artifact: bool = False
+) -> Finding:
+    confidence = (
+        FindingConfidence.HIGH
+        if is_suspicious_artifact and hit.confidence < FindingConfidence.HIGH
+        else hit.confidence
+    )
     return _rule_finding(
-        hit.rule_id, path, hit.line, hit.severity, hit.confidence, hit.evidence, runs_at_install
+        hit.rule_id, path, hit.line, hit.severity, confidence, hit.evidence, runs_at_install
     )
 
 
@@ -316,6 +345,8 @@ def _rule_finding(
     confidence: FindingConfidence,
     evidence: str,
     runs_at_install: bool,
+    explanation: str | None = None,
+    recommended_action: str | None = None,
 ) -> Finding:
     rule = RULES[rule_id]
     return Finding(
@@ -327,6 +358,8 @@ def _rule_finding(
         severity=severity,
         confidence=confidence,
         evidence=evidence,
+        explanation=explanation or rule.explanation or rule.title,
+        recommended_action=recommended_action or rule.recommended_action or rule.recommendation,
         recommendation=rule.recommendation,
         runs_at_install=runs_at_install,
     )
