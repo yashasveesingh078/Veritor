@@ -14,6 +14,7 @@ separately, so that a valid attestation from the wrong repository stands out.
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -219,6 +220,37 @@ def _claimed_in_metadata(metadata: PackageMetadata) -> bool:
     return isinstance(dist, dict) and isinstance(dist.get("attestations"), dict)
 
 
+def _evaluate_package_integrity(
+    metadata: PackageMetadata, tarball_path: Path
+) -> tuple[str | None, bool | None]:
+    """Evaluate tarball bytes against available registry package integrity metadata."""
+    declared: str | None = None
+    dist = metadata.manifest.get("dist")
+    if isinstance(dist, dict) and isinstance(dist.get("integrity"), str):
+        declared = str(dist["integrity"])
+    elif metadata.artifacts and metadata.artifacts[0].declared_integrity:
+        declared = metadata.artifacts[0].declared_integrity
+
+    if not isinstance(declared, str):
+        return None, None
+
+    matches: bool | None = None
+    try:
+        data = tarball_path.read_bytes()
+        if declared.startswith("sha512-"):
+            actual_digest = hashlib.sha512(data).digest()
+            actual_b64 = "sha512-" + base64.b64encode(actual_digest).decode()
+            matches = actual_b64 == declared
+        elif declared.startswith("sha1-") or (
+            len(declared) == 40 and all(c in "0123456789abcdefABCDEF" for c in declared)
+        ):
+            actual_sha1 = hashlib.sha1(data, usedforsecurity=False).hexdigest().lower()  # noqa: S324
+            matches = actual_sha1 == declared.lower().removeprefix("sha1-")
+    except Exception:
+        matches = None
+    return declared, matches
+
+
 class NpmProvenanceChecker:
     def __init__(
         self,
@@ -237,6 +269,7 @@ class NpmProvenanceChecker:
     ) -> ProvenanceResult:
         """Check provenance for a downloaded tarball. Failures are returned, not raised."""
         claimed = _claimed_in_metadata(metadata)
+        package_integrity, integrity_matches = _evaluate_package_integrity(metadata, tarball_path)
         url = (
             f"{REGISTRY_URL}/-/npm/v1/attestations/"
             f"{quote(metadata.name, safe='@')}@{quote(metadata.version, safe='')}"
@@ -249,21 +282,33 @@ class NpmProvenanceChecker:
                     ProvenanceStatus.UNCERTAIN,
                     "Metadata lists provenance, but the registry has no attestation for it.",
                     claimed,
+                    package_integrity,
+                    integrity_matches,
                 )
             return _result(
                 ProvenanceStatus.UNAVAILABLE,
                 "This version has no published provenance. Most packages do not.",
                 claimed,
+                package_integrity,
+                integrity_matches,
             )
         except AdapterError as exc:
             return _result(
-                ProvenanceStatus.UNCERTAIN, f"Could not retrieve attestations: {exc}", claimed
+                ProvenanceStatus.UNCERTAIN,
+                f"Could not retrieve attestations: {exc}",
+                claimed,
+                package_integrity,
+                integrity_matches,
             )
 
         attestations = document.get("attestations")
         if not isinstance(attestations, list):
             return _result(
-                ProvenanceStatus.UNCERTAIN, "The attestation response is malformed.", claimed
+                ProvenanceStatus.UNCERTAIN,
+                "The attestation response is malformed.",
+                claimed,
+                package_integrity,
+                integrity_matches,
             )
         provenance = [
             item
@@ -277,14 +322,26 @@ class NpmProvenanceChecker:
                 ProvenanceStatus.UNAVAILABLE,
                 "The registry has no SLSA provenance for this version.",
                 claimed,
+                package_integrity,
+                integrity_matches,
             )
         if len(provenance) > 1:
             return _result(
                 ProvenanceStatus.UNCERTAIN,
                 "The registry lists several provenance attestations for this version.",
                 claimed,
+                package_integrity,
+                integrity_matches,
             )
-        return await self._verify(provenance[0], metadata, tarball_path, match, claimed)
+        return await self._verify(
+            provenance[0],
+            metadata,
+            tarball_path,
+            match,
+            claimed,
+            package_integrity,
+            integrity_matches,
+        )
 
     async def _verify(
         self,
@@ -293,35 +350,64 @@ class NpmProvenanceChecker:
         tarball_path: Path,
         match: SourceMatch,
         claimed: bool,
+        package_integrity: str | None,
+        integrity_matches: bool | None,
     ) -> ProvenanceResult:
         bundle = attestation.get("bundle")
         if not isinstance(bundle, dict):
-            return _result(ProvenanceStatus.UNCERTAIN, "The attestation has no bundle.", claimed)
+            return _result(
+                ProvenanceStatus.UNCERTAIN,
+                "The attestation has no bundle.",
+                claimed,
+                package_integrity,
+                integrity_matches,
+            )
 
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 verified = await asyncio.to_thread(self._verifier.verify, json.dumps(bundle))
         except SignatureInvalidError as exc:
             return _result(
-                ProvenanceStatus.INVALID, f"The signature failed verification: {exc}", claimed
+                ProvenanceStatus.INVALID,
+                f"The signature failed verification: {exc}",
+                claimed,
+                package_integrity,
+                integrity_matches,
             )
         except BundleUnreadableError as exc:
             return _result(
-                ProvenanceStatus.UNCERTAIN, f"The attestation could not be read: {exc}", claimed
+                ProvenanceStatus.UNCERTAIN,
+                f"The attestation could not be read: {exc}",
+                claimed,
+                package_integrity,
+                integrity_matches,
             )
         except TimeoutError:
             return _result(
-                ProvenanceStatus.NOT_VERIFIED, "Verification did not finish in time.", claimed
+                ProvenanceStatus.NOT_VERIFIED,
+                "Verification did not finish in time.",
+                claimed,
+                package_integrity,
+                integrity_matches,
             )
         except VerificationUnavailableError as exc:
             return _result(
                 ProvenanceStatus.NOT_VERIFIED,
                 f"An attestation exists, but it could not be verified: {exc}",
                 claimed,
+                package_integrity,
+                integrity_matches,
             )
 
         return await asyncio.to_thread(
-            _evaluate_signed_content, verified, metadata, tarball_path, match, claimed
+            _evaluate_signed_content,
+            verified,
+            metadata,
+            tarball_path,
+            match,
+            claimed,
+            package_integrity,
+            integrity_matches,
         )
 
 
@@ -331,6 +417,8 @@ def _evaluate_signed_content(
     tarball_path: Path,
     match: SourceMatch,
     claimed: bool,
+    package_integrity: str | None = None,
+    integrity_matches: bool | None = None,
 ) -> ProvenanceResult:
     """Everything here was signed, so any disagreement is a failed attestation."""
 
@@ -341,6 +429,13 @@ def _evaluate_signed_content(
             claimed_in_metadata=claimed,
             signature_verified=True,
             tarball_digest_matches=digest_matches,
+            package_integrity=package_integrity,
+            integrity_matches=integrity_matches,
+        )
+
+    if integrity_matches is False:
+        return invalid(
+            "The downloaded tarball does not match declared registry integrity metadata."
         )
 
     identity = verified.identity
@@ -404,6 +499,8 @@ def _evaluate_signed_content(
         claimed_in_metadata=claimed,
         signature_verified=True,
         tarball_digest_matches=True,
+        package_integrity=package_integrity,
+        integrity_matches=integrity_matches,
         source_repository=identity.source_repository,
         source_commit=identity.source_commit.lower(),
         source_ref=identity.source_ref,
@@ -426,8 +523,20 @@ def _commit_in_statement(statement: dict[str, Any]) -> str | None:
     return commit.lower() if isinstance(commit, str) else None
 
 
-def _result(status: ProvenanceStatus, explanation: str, claimed: bool) -> ProvenanceResult:
-    return ProvenanceResult(status=status, explanation=explanation, claimed_in_metadata=claimed)
+def _result(
+    status: ProvenanceStatus,
+    explanation: str,
+    claimed: bool,
+    package_integrity: str | None = None,
+    integrity_matches: bool | None = None,
+) -> ProvenanceResult:
+    return ProvenanceResult(
+        status=status,
+        explanation=explanation,
+        claimed_in_metadata=claimed,
+        package_integrity=package_integrity,
+        integrity_matches=integrity_matches,
+    )
 
 
 __all__ = [

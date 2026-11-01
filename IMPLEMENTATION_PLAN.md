@@ -72,7 +72,7 @@ findings, file inventory, and diff endpoints.
 - Done: confirm the `package.json` at the matched commit has the same name and
   version, and report any disagreement as a warning.
 
-### Phase 4: Static Security Scanner (done)
+### Phase 4: Static Security Scanner & Provenance / Risk Engine (done)
 
 - Done: AST-based scanning for JavaScript and TypeScript (supporting JS, MJS, CJS,
   JSX, TS, MTS, CTS, TSX) using Tree-Sitter without ever executing untrusted code.
@@ -88,8 +88,16 @@ findings, file inventory, and diff endpoints.
 - Done: contract validation: every finding includes `rule_id`, `path`, `line`, `severity`, `evidence`, `explanation`, `confidence`, and `recommended_action`.
 - Done: source-to-package differential scanning: pre-existing source patterns are separated so ordinary API usage is never treated as malicious.
 - Done: integration with artifact intelligence (suspicious artifacts elevate finding confidence).
-- Done: npm provenance verification with Sigstore against the downloaded tarball.
-- Done: deterministic risk scoring traced to specific factors.
+- Done (Part A — Provenance):
+  - Check npm SLSA provenance attestations under Sigstore public trust root.
+  - Inspect GitHub Actions build identity (Fulcio OID certificate extensions for source repository, commit, ref, workflow, and OIDC issuer).
+  - Evaluate package integrity metadata against actual tarball SHA-512 / SHA-1 bytes.
+  - Strict statuses: `VERIFIED`, `NOT_VERIFIED`, `UNAVAILABLE`, `INVALID`, `UNCERTAIN`.
+  - Guardrails: Pydantic model validator prevents claiming verification based on metadata alone.
+- Done (Part B — Risk Engine):
+  - Deterministic 0–100 heuristic scoring derived from unexpected package differences, security findings, artifact uncertainty, source matching confidence, provenance results, and unexpected lifecycle scripts.
+  - Returns complete contract: `level`, `score`, `contributing_evidence`, `confidence`, `recommendations`, and `limitations`.
+  - Core safety rules: missing provenance alone awards 0 points and never implies maliciousness; clean findings with uncertain source or binaries does not imply safety.
 
 ### Phase 5: AI Investigator (done)
 
