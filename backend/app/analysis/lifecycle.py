@@ -116,17 +116,20 @@ def check_lifecycle(
             )
 
     if binding_gyp_added:
+        rule = RULES["LIFE-006"]
         findings.append(
             Finding(
                 rule_id="LIFE-006",
-                title=RULES["LIFE-006"].title,
-                category=RULES["LIFE-006"].category,
+                title=rule.title,
+                category=rule.category,
                 path="binding.gyp",
                 line=1,
                 severity=Severity.MEDIUM,
                 confidence=FindingConfidence.HIGH,
                 evidence="binding.gyp is in the package but not the source",
-                recommendation=RULES["LIFE-006"].recommendation,
+                explanation=rule.explanation or rule.title,
+                recommended_action=rule.recommended_action or rule.recommendation,
+                recommendation=rule.recommendation,
                 runs_at_install=True,
             )
         )
@@ -153,6 +156,8 @@ def _finding(
         severity=severity,
         confidence=confidence,
         evidence=" ".join(evidence.split())[:MAX_EVIDENCE_CHARS],
+        explanation=rule.explanation or rule.title,
+        recommended_action=rule.recommended_action or rule.recommendation,
         recommendation=rule.recommendation,
         runs_at_install=True,
     )

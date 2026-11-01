@@ -33,7 +33,18 @@ class FileStatus(StrEnum):
 
 class GeneratedClassification(StrEnum):
     LIKELY_GENERATED = "LIKELY_GENERATED"
+    SUSPICIOUS = "SUSPICIOUS"
     UNCERTAIN = "UNCERTAIN"
+
+
+class ArtifactType(StrEnum):
+    COMPILED = "COMPILED"
+    BUNDLED = "BUNDLED"
+    MINIFIED = "MINIFIED"
+    SOURCE_MAP = "SOURCE_MAP"
+    DECLARATION = "DECLARATION"
+    GENERATED = "GENERATED"
+    UNKNOWN = "UNKNOWN"
 
 
 class EvidenceKind(StrEnum):
@@ -46,6 +57,11 @@ class EvidenceKind(StrEnum):
     SOURCE_COUNTERPART = "source_counterpart"
     SOURCE_ENTRY_POINT = "source_entry_point"
     SOURCE_MAP = "source_map"
+    CONTENT_SIMILARITY = "content_similarity"
+    # Suspicious evidence: indicators that an artifact is deceptive, tampered, or untracked.
+    SUSPICIOUS_INDICATOR = "suspicious_indicator"
+    INSTALL_SCRIPT_EXECUTION = "install_script_execution"
+    DECEPTIVE_ARTIFACT = "deceptive_artifact"
     # Supporting evidence: never sufficient by itself.
     GITIGNORE = "gitignore"
     FILES_FIELD = "files_field"
@@ -58,6 +74,7 @@ RELATIONSHIP_EVIDENCE = frozenset(
         EvidenceKind.SOURCE_ENTRY_POINT,
         EvidenceKind.SOURCE_MAP,
         EvidenceKind.OUTPUT_FILE,
+        EvidenceKind.CONTENT_SIMILARITY,
     }
 )
 
@@ -96,7 +113,24 @@ class GeneratedAssessment(_FrozenModel):
     """
 
     classification: GeneratedClassification
+    explanation: str = Field(
+        default="",
+        description="Detailed human-readable explanation of why this file was classified this way.",
+    )
     evidence: tuple[Evidence, ...] = ()
+    confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Confidence in the classification (0.0 to 1.0)."
+    )
+    artifact_type: ArtifactType = Field(
+        default=ArtifactType.UNKNOWN,
+        description="Identified artifact type (COMPILED, BUNDLED, MINIFIED, etc.).",
+    )
+    content_similarity: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Content similarity score with source counterpart if applicable.",
+    )
     blockers: tuple[str, ...] = Field(
         default=(), description="Facts that rule out LIKELY_GENERATED, whatever else is true."
     )
@@ -172,6 +206,7 @@ class ComparisonSummary(_FrozenModel):
     binary_different: int = 0
     renamed: int = 0
     likely_generated: int = 0
+    suspicious: int = 0
     uncertain: int = 0
 
 

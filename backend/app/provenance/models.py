@@ -33,6 +33,12 @@ class ProvenanceResult(BaseModel):
     )
     signature_verified: bool = False
     tarball_digest_matches: bool = False
+    package_integrity: str | None = Field(
+        default=None, description="Declared package integrity from registry metadata."
+    )
+    integrity_matches: bool | None = Field(
+        default=None, description="Whether tarball bytes match declared package integrity."
+    )
     # These come from the signed certificate, and are only set when status is VERIFIED.
     source_repository: str | None = None
     source_commit: str | None = None

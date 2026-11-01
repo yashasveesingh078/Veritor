@@ -75,6 +75,12 @@ class Completeness(StrEnum):
     PARTIAL = "partial"
 
 
+class RiskConfidence(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
 class RiskFactor(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -98,6 +104,9 @@ class RiskAssessment(BaseModel):
     score: int = Field(ge=0, le=MAX_SCORE)
     level: RiskLevel
     completeness: Completeness
+    confidence: RiskConfidence = RiskConfidence.HIGH
+    contributing_evidence: tuple[str, ...] = ()
+    recommendations: tuple[str, ...] = ()
     factors: tuple[RiskFactor, ...]
     floors: tuple[LevelFloor, ...] = Field(
         description="Hard evidence that sets a minimum level, whatever the score."
@@ -138,14 +147,143 @@ def score_release(
     level = max(
         [_level_for(score), *(floor.level for floor in floors)], key=lambda item: item.value
     )
+    confidence = _derive_confidence(match, report, analysis)
+    contributing_evidence = _collect_contributing_evidence(factors)
+    recommendations = _synthesize_recommendations(
+        score, level, factors, floors, provenance, analysis, match
+    )
     return RiskAssessment(
         score=score,
         level=level,
         completeness=Completeness.PARTIAL if limitations else Completeness.COMPLETE,
+        confidence=confidence,
+        contributing_evidence=contributing_evidence,
+        recommendations=recommendations,
         factors=tuple(factors),
         floors=tuple(floors),
         limitations=tuple(limitations),
     )
+
+
+def _derive_confidence(
+    match: SourceMatch,
+    report: ComparisonReport | None,
+    analysis: SecurityAnalysis,
+) -> RiskConfidence:
+    """Derive assessment confidence based on source tracing and analysis coverage."""
+    if match.status is not MatchStatus.MATCHED or report is None:
+        return RiskConfidence.MEDIUM
+    if match.confidence is Confidence.LOW or len(analysis.gaps) >= 3:
+        return RiskConfidence.LOW
+    if match.confidence is Confidence.MEDIUM or len(analysis.gaps) > 0:
+        return RiskConfidence.MEDIUM
+    if report.scope.method is ScopeMethod.UNRESOLVED:
+        return RiskConfidence.MEDIUM
+    return RiskConfidence.HIGH
+
+
+def _collect_contributing_evidence(factors: list[RiskFactor]) -> tuple[str, ...]:
+    lines: list[str] = []
+    for factor in factors:
+        if factor.points > 0:
+            line = f"{factor.id} (+{factor.points} pts): {factor.explanation}"
+            if factor.evidence:
+                samples = ", ".join(factor.evidence[:3])
+                line += f" [Evidence: {samples}]"
+            lines.append(line)
+        elif factor.points < 0:
+            lines.append(f"{factor.id} ({factor.points} pts): {factor.explanation}")
+    return tuple(lines)
+
+
+def _synthesize_recommendations(
+    score: int,
+    level: RiskLevel,
+    factors: list[RiskFactor],
+    floors: list[LevelFloor],
+    provenance: ProvenanceResult,
+    analysis: SecurityAnalysis,
+    match: SourceMatch,
+) -> tuple[str, ...]:
+    recommendations: list[str] = []
+    factor_ids = {f.id for f in factors}
+
+    if provenance.status is ProvenanceStatus.INVALID:
+        recommendations.append(
+            "Do not install: cryptographic provenance attestation is invalid or was tampered with."
+        )
+    if "PROVENANCE_OTHER_REPOSITORY" in factor_ids:
+        recommendations.append(
+            f"Verify build origin: package was built from {provenance.source_repository}, "
+            "not the declared repository."
+        )
+    if "PROVENANCE_OTHER_COMMIT" in factor_ids:
+        recommendations.append(
+            f"Review commit discrepancy: attestation commit {provenance.source_commit} "
+            "differs from matched source commit."
+        )
+    if "INTEGRITY_MISMATCH" in factor_ids:
+        recommendations.append(
+            "Do not install: package tarball bytes do not match declared package integrity hash."
+        )
+
+    # Lifecycle scripts
+    install_rules = [f for f in analysis.findings if f.rule_id.startswith("LIFE-")]
+    if any(f.rule_id in ("LIFE-001", "LIFE-005") for f in install_rules):
+        recommendations.append(
+            "Review package.json lifecycle scripts before install: untracked or risky commands "
+            "run automatically with user privileges."
+        )
+
+    # Suspicious artifacts
+    if "SUSPICIOUS_BUILD_ARTIFACT" in factor_ids:
+        recommendations.append(
+            "Audit suspicious build artifacts for hidden payloads, deceptive source maps, "
+            "or unexpected executable permissions."
+        )
+
+    # Added / modified code with no evidence
+    if "ADDED_CODE_UNEXPLAINED" in factor_ids or "SOURCE_FILE_MODIFIED" in factor_ids:
+        recommendations.append(
+            "Review extra code and modified files that have no counterpart or build evidence "
+            "in the source repository."
+        )
+
+    if "NATIVE_BINARY_UNEXPLAINED" in factor_ids:
+        recommendations.append(
+            "Inspect binary executables included in the package that cannot be audited "
+            "from source code."
+        )
+
+    # Specific high-severity findings (sorted deterministically)
+    sorted_findings = sorted(
+        analysis.findings,
+        key=lambda f: (-f.severity, -f.confidence, f.rule_id, f.path, f.line),
+    )
+    for finding in sorted_findings:
+        action = finding.recommended_action or finding.recommendation
+        if finding.severity >= Severity.HIGH and action:
+            if action not in recommendations:
+                recommendations.append(action)
+
+    if match.status is not MatchStatus.MATCHED:
+        recommendations.append(
+            "Establish the exact source repository commit to perform source-to-package "
+            "diff validation."
+        )
+
+    if not recommendations:
+        if score < 20:
+            recommendations.append(
+                "Routine dependency update: verify release notes and automated tests "
+                "before updating."
+            )
+        else:
+            recommendations.append(
+                "Review highlighted factors and diffs before installing in production environments."
+            )
+
+    return tuple(recommendations)
 
 
 def _level_for(score: int) -> RiskLevel:
@@ -222,9 +360,28 @@ def _uncertain(item: FileComparison) -> bool:
     )
 
 
+def _suspicious(item: FileComparison) -> bool:
+    return (
+        item.generated is not None
+        and item.generated.classification is GeneratedClassification.SUSPICIOUS
+    )
+
+
 def _comparison_factors(report: ComparisonReport, limitations: list[str]) -> list[RiskFactor]:
     category = FactorCategory.COMPARISON
     factors: list[RiskFactor] = []
+    suspicious = [item.path for item in report.files if _suspicious(item)]
+    if suspicious:
+        factors.append(
+            _factor(
+                "SUSPICIOUS_BUILD_ARTIFACT",
+                category,
+                _scaled(len(suspicious), 8, 24),
+                f"{len(suspicious)} build artifact(s) showed suspicious indicators "
+                "(e.g. untracked install script execution, obfuscation, or deceptive mapping).",
+                suspicious,
+            )
+        )
     added_code = [
         item.path
         for item in report.files
@@ -463,6 +620,22 @@ def _provenance_factors(
     provenance: ProvenanceResult, floors: list[LevelFloor], limitations: list[str]
 ) -> list[RiskFactor]:
     category = FactorCategory.PROVENANCE
+    if provenance.integrity_matches is False:
+        floors.append(
+            LevelFloor(
+                level=RiskLevel.HIGH,
+                reason="The tarball does not match registry package integrity metadata.",
+            )
+        )
+        return [
+            _factor(
+                "INTEGRITY_MISMATCH",
+                category,
+                40,
+                "Package tarball bytes do not match the declared package integrity hash.",
+            )
+        ]
+
     status = provenance.status
     if status is ProvenanceStatus.INVALID:
         floors.append(
